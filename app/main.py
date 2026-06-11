@@ -15,7 +15,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlmodel import Session, SQLModel, select
 
 from .database import init_db, get_session
-from .models import Certification
+from .models import Certification, StudySession
 
 app = FastAPI(title="資格学習アプリ API")
 
@@ -117,6 +117,47 @@ def delete_certification(cert_id: int, session: Session = Depends(get_session)):
     session.delete(cert)
     session.commit()
     return {"ok": True}
+
+# ---- 学習記録の API (スライス 2)-------------------------------------------
+
+class StudySessionCreate(SQLModel):
+    """勉強を一回記録するときに受け取るデータ"""
+    duration_min: int                    #勉強した時間 (分)
+    studied_at: Optional[date] = None    #学習日。省略したら今日になる
+
+
+@app.post("/certifications/{cert_id}/sessions")
+def create_session(
+    cert_id: int,
+    data: StudySessionCreate,
+    session: Session = Depends(get_session),
+):
+    """指定した資格に、勉強記録を１件保存する"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    record = StudySession(
+        certification_id=cert_id,
+        duration_min=data.duration_min,
+        studied_at=data.studied_at or date.today(),
+    )
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+@app.get("/certifications/{cert_id}/sessions")
+def list_sessions(cert_id: int, session: Session = Depends(get_session)):
+    """その資格の勉強記録の一覧と、総勉強時間（分）を返す。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    records = session.exec(
+        select(StudySession).where(StudySession.certification_id == cert_id)
+    ).all()
+    total = sum(r.duration_min for r in records)
+    return {"total_min": total, "sessions": records}
 
 
 # =========================================================================
