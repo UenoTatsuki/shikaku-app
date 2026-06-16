@@ -15,7 +15,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlmodel import Session, SQLModel, select
 
 from .database import init_db, get_session
-from .models import Certification, StudySession, Textbook, Flashcard
+from .models import Certification, StudySession, Textbook, Flashcard, Todo
 
 app = FastAPI(title="資格学習アプリ API")
 
@@ -323,6 +323,77 @@ def review_card(
     session.commit()
     session.refresh(card)
     return card
+
+
+# ---- Todo の API（スライス 5）------------------------------------------
+
+class TodoCreate(SQLModel):
+    """タスクを追加するときのデータ。"""
+    title: str
+
+
+class TodoUpdate(SQLModel):
+    """タスクの更新。完了切り替えや内容変更に使う。送った項目だけ変わる。"""
+    title: Optional[str] = None
+    is_done: Optional[bool] = None
+
+
+@app.post("/certifications/{cert_id}/todos")
+def create_todo(
+    cert_id: int,
+    data: TodoCreate,
+    session: Session = Depends(get_session),
+):
+    """指定した資格にタスクを1件追加する。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    todo = Todo(certification_id=cert_id, title=data.title)
+    session.add(todo)
+    session.commit()
+    session.refresh(todo)
+    return todo
+
+
+@app.get("/certifications/{cert_id}/todos")
+def list_todos(cert_id: int, session: Session = Depends(get_session)):
+    """その資格のタスク一覧を返す。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    todos = session.exec(
+        select(Todo).where(Todo.certification_id == cert_id)
+    ).all()
+    return todos
+
+
+@app.patch("/todos/{todo_id}")
+def update_todo(
+    todo_id: int,
+    data: TodoUpdate,
+    session: Session = Depends(get_session),
+):
+    """タスクを更新する（完了の切り替え・内容変更）。"""
+    todo = session.get(Todo, todo_id)
+    if todo is None:
+        raise HTTPException(status_code=404, detail="タスクが見つかりません")
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(todo, key, value)
+    session.add(todo)
+    session.commit()
+    session.refresh(todo)
+    return todo
+
+
+@app.delete("/todos/{todo_id}")
+def delete_todo(todo_id: int, session: Session = Depends(get_session)):
+    """タスクを削除する。"""
+    todo = session.get(Todo, todo_id)
+    if todo is None:
+        raise HTTPException(status_code=404, detail="タスクが見つかりません")
+    session.delete(todo)
+    session.commit()
+    return {"ok": True}
 
 
 # =========================================================================
