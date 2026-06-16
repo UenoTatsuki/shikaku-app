@@ -8,14 +8,14 @@
 ブラウザ上で全 API を試せる（FastAPI が自動で用意してくれる画面）。
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException
 from sqlmodel import Session, SQLModel, select
 
 from .database import init_db, get_session
-from .models import Certification, StudySession, Textbook
+from .models import Certification, StudySession, Textbook, Flashcard
 
 app = FastAPI(title="資格学習アプリ API")
 
@@ -233,6 +233,96 @@ def delete_textbook(textbook_id: int, session: Session = Depends(get_session)):
     session.delete(book)
     session.commit()
     return {"ok": True}
+
+
+# ---- 暗記カードの API（スライス 4）------------------------------------------
+
+# 箱番号ごとの「次の出題までの日数」。箱が上がるほど間隔が延びる。
+BOX_INTERVALS = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}
+
+
+class FlashcardCreate(SQLModel):
+    """カードを登録するときのデータ。"""
+    question: str   # 問題（表）
+    answer: str     # 答え（裏）
+
+
+class ReviewResult(SQLModel):
+    """復習の結果。正解なら true、不正解なら false。"""
+    correct: bool
+
+
+@app.post("/certifications/{cert_id}/cards")
+def create_card(
+    cert_id: int,
+    data: FlashcardCreate,
+    session: Session = Depends(get_session),
+):
+    """指定した資格にカードを1枚登録する。作った直後から復習対象になる。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    card = Flashcard(
+        certification_id=cert_id,
+        question=data.question,
+        answer=data.answer,
+        box=1,
+        next_due=date.today(),   # 今日から出題対象
+    )
+    session.add(card)
+    session.commit()
+    session.refresh(card)
+    return card
+
+
+@app.get("/certifications/{cert_id}/cards")
+def list_cards(cert_id: int, session: Session = Depends(get_session)):
+    """その資格のカードを全部返す。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    cards = session.exec(
+        select(Flashcard).where(Flashcard.certification_id == cert_id)
+    ).all()
+    return cards
+
+
+@app.get("/certifications/{cert_id}/cards/due")
+def list_due_cards(cert_id: int, session: Session = Depends(get_session)):
+    """今日復習すべきカード（next_due が今日以前）だけを返す。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    today = date.today()
+    cards = session.exec(
+        select(Flashcard).where(
+            Flashcard.certification_id == cert_id,
+            Flashcard.next_due <= today,
+        )
+    ).all()
+    return cards
+
+
+@app.post("/cards/{card_id}/review")
+def review_card(
+    card_id: int,
+    data: ReviewResult,
+    session: Session = Depends(get_session),
+):
+    """復習結果を受け取り、箱と次回出題日を更新する（このアプリの核）。"""
+    card = session.get(Flashcard, card_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="カードが見つかりません")
+    if data.correct:
+        card.box = min(card.box + 1, 5)   # 正解：1つ上の箱へ（最大5）
+    else:
+        card.box = 1                      # 不正解：箱1に戻す
+    interval = BOX_INTERVALS[card.box]
+    card.next_due = date.today() + timedelta(days=interval)
+    session.add(card)
+    session.commit()
+    session.refresh(card)
+    return card
 
 
 # =========================================================================
