@@ -12,12 +12,20 @@ from datetime import date, timedelta
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, SQLModel, select
 
 from .database import init_db, get_session
 from .models import Certification, StudySession, Textbook, Flashcard, Todo
 
 app = FastAPI(title="資格学習アプリ API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
