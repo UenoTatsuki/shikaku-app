@@ -15,7 +15,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlmodel import Session, SQLModel, select
 
 from .database import init_db, get_session
-from .models import Certification, StudySession
+from .models import Certification, StudySession, Textbook
 
 app = FastAPI(title="資格学習アプリ API")
 
@@ -158,6 +158,81 @@ def list_sessions(cert_id: int, session: Session = Depends(get_session)):
     ).all()
     total = sum(r.duration_min for r in records)
     return {"total_min": total, "sessions": records}
+
+
+# ---- 参考書の API（スライス 3）------------------------------------------
+
+class TextbookCreate(SQLModel):
+    """参考書を登録するときに受け取るデータ。"""
+    title: str
+    current_chapter: int = 0           # 今いる章（最初は0）
+    total_chapters: Optional[int] = None  # 全章数（任意）
+
+
+class TextbookUpdate(SQLModel):
+    """進捗などを更新するときのデータ。送った項目だけが変わる。"""
+    title: Optional[str] = None
+    current_chapter: Optional[int] = None
+    total_chapters: Optional[int] = None
+
+
+@app.post("/certifications/{cert_id}/textbooks")
+def create_textbook(
+    cert_id: int,
+    data: TextbookCreate,
+    session: Session = Depends(get_session),
+):
+    """指定した資格に参考書を1冊登録する。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    book = Textbook(certification_id=cert_id, **data.model_dump())
+    session.add(book)
+    session.commit()
+    session.refresh(book)
+    return book
+
+
+@app.get("/certifications/{cert_id}/textbooks")
+def list_textbooks(cert_id: int, session: Session = Depends(get_session)):
+    """その資格の参考書一覧を返す。"""
+    cert = session.get(Certification, cert_id)
+    if cert is None:
+        raise HTTPException(status_code=404, detail="資格が見つかりません")
+    books = session.exec(
+        select(Textbook).where(Textbook.certification_id == cert_id)
+    ).all()
+    return books
+
+
+@app.patch("/textbooks/{textbook_id}")
+def update_textbook(
+    textbook_id: int,
+    data: TextbookUpdate,
+    session: Session = Depends(get_session),
+):
+    """参考書の進捗（現在の章など）を更新する。送った項目だけ変わる。"""
+    book = session.get(Textbook, textbook_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="参考書が見つかりません")
+    update_data = data.model_dump(exclude_unset=True)  # 送られた項目だけ取り出す
+    for key, value in update_data.items():
+        setattr(book, key, value)
+    session.add(book)
+    session.commit()
+    session.refresh(book)
+    return book
+
+
+@app.delete("/textbooks/{textbook_id}")
+def delete_textbook(textbook_id: int, session: Session = Depends(get_session)):
+    """参考書を削除する。"""
+    book = session.get(Textbook, textbook_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="参考書が見つかりません")
+    session.delete(book)
+    session.commit()
+    return {"ok": True}
 
 
 # =========================================================================
